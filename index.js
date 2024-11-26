@@ -1,137 +1,118 @@
 const express = require('express')
 const app = express()
 const cors = require('cors')
-const bodyParser = require("body-parser");
+const mongoose = require('mongoose')
 require('dotenv').config()
 
-app.use(cors());
-app.use(express.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static('public'));
+try{
+  mongoose.connect(process.env.DB_URI);
+}catch(err){
+  console.log(err);
+} 
 
-let users = [
-  {
-    _id: "5fb5853f734231456ccb3b05",
-    username: "player1",
-  },
-  {
-    _id: "5fb5853f734231456ccb3b06",
-    username: "player2",
-  },
-  {
-    _id: "5fb5853f734231456ccb3b07",
-    username: "player3",
-  },
-  {
-    _id: "5fb5853f734231456ccb3b08",
-    username: "player4",
-  },
-];
+const { Schema } = mongoose;
+const userSchema = new Schema({
+  username: { type: String, required: true }
+});
+const exerciseSchema = new Schema({
+  userId: { type: String, required: true },
+  description: { type: String, required: true },
+  duration: { type: Number, required: true },
+  date: { type: Date, default: Date.now }
+});
+const Exercise = mongoose.model('Exercise', exerciseSchema);
+const User = mongoose.model('User', userSchema);
 
-let activities = [
-  {
-    _id:"5fb5853f734231456ccb3b05",
-    activities: [
-      {description: "running", duration: 50, date:"2024-11-10"},
-      {description: "lifting", duration: 80, date:"2024-11-11"},
-      {description: "swimming", duration: 50, date:"2024-11-12"},
-    ]
-  },
-  {
-    _id:"5fb5853f734231456ccb3b06",
-    activities: [
-      {description: "running", duration: 50, date:"2024-11-10"},
-      {description: "lifting", duration: 80, date:"2024-11-11"},
-      {description: "swimming", duration: 50, date:"2024-11-12"},
-    ]
-  },
-  {
-    _id:"5fb5853f734231456ccb3b07",
-    activities: [
-      {description: "running", duration: 50, date:"2024-11-10"},
-      {description: "lifting", duration: 80, date:"2024-11-11"},
-      {description: "swimming", duration: 50, date:"2024-11-12"},
-    ]
-  },
-  {
-    _id:"5fb5853f734231456ccb3b08",
-    activities: [
-      {description: "running", duration: 50, date:"2024-11-10"},
-      {description: "lifting", duration: 80, date:"2024-11-11"},
-      {description: "swimming", duration: 50, date:"2024-11-12"},
-    ]
-  },
-];
-
+app.use(cors())
+app.use(express.static('public'))
+app.use(express.urlencoded({ extended: true }))
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/views/index.html')
 });
 
-app.post("/api/users", (req, res) => {
-  return res.status(200).json({
-    username: req.body.username,
-    _id: "5fb5853f734231456ccb3b09"
-  })
-});
-
-app.get("/api/users", (req,res) => {
-  return res.status(200).json(users);
-});
-
-app.post("/api/users/:_id/exercises", (req, res) => {
-  const user_id = req.params._id;
-  const duration = req.body.duration;
-  const description = req.body.description;
-  const date = req.body.date ? new Date(req.body.date) : new Date();
-  const user = users.find(u => u._id === user_id);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
+app.get('/api/users', async (req, res) => {
+  const users = await User.find();
+  try{
+    res.json(users.map(user => ({ username: user.username, _id: user._id })));
+  }catch(err){
+    res.json({ error: 'Username already taken' });
   }
-
-  const newExercise = {
-    description,
-    duration: Number(duration),
-    date: date.toDateString()
-  };
-
-  return res.status(200).json({
-    username: user.username,
-    description: newExercise.description,
-    duration: newExercise.duration,
-    _id: user._id,
-    date: newExercise.date
-  });
 });
 
-app.get("/api/users/:_id/logs", (req, res) => {
+app.post('/api/users', async (req, res) => {
+  const username = req.body.username;
+  const newUser = new User({ username });
+  try {
+    await newUser.save();
+    res.json({ username, _id: newUser._id });
+  }catch(err){
+    res.json({ error: 'Username already taken' });
+  }
+});
+
+app.post('/api/users/:_id/exercises', async (req, res) => {
+  const userId = req.params._id;
+  const { description, duration, date } = req.body;
+  try{
+    const user = await User.findById(userId);
+    if(!user){
+      return res.json({ error: 'User not found' });
+    }
+    const exerciseObject = new Exercise({
+      userId,
+      description,
+      duration,
+      date: date ? new Date(date) : new Date()
+    });
+    const exercise = await exerciseObject.save();
+    res.json({
+      _id: userId,
+      username: user.username,
+      date: exercise.date.toDateString(),
+      duration: exercise.duration,
+      description: exercise.description
+    });
+  }catch(err){
+    res.json({ error: 'Username already taken' });
+  }
+}
+);
+
+app.get('/api/users/:_id/logs', async (req, res) => {
   const userId = req.params._id;
   const { from, to, limit } = req.query;
-
-  const user = users.find(a => a._id === userId);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
+  try{
+    const user = await User.findById(userId);
+    if(!user){
+      return res.json({ error: 'User not found' });
+    }
+    const exercises = await Exercise.find({ userId });
+    const logs = exercises.map(exercise => ({
+      description: exercise.description,
+      duration: exercise.duration,
+      date: exercise.date.toDateString()
+    }));
+    let filteredLogs = logs;
+    if(from){
+      filteredLogs = filteredLogs.filter(log => new Date(log.date) >= new Date(from));
+    }
+    if(to){
+      filteredLogs = filteredLogs.filter(log => new Date(log.date) <= new Date(to));
+    }
+    if(limit){
+      filteredLogs = filteredLogs.slice(0, limit);
+    }
+    res.json({
+      _id: userId,
+      username: user.username,
+      count: filteredLogs.length,
+      log: filteredLogs
+    });
+  }catch(err){
+    res.json({ error: 'Username already taken' });
   }
-  let acts = activities.find(a=> a._id === userId);
-  let logs = acts.activities;
-  if (from) {
-    const fromDate = new Date(from);
-    logs = logs.filter(log => new Date(log.date) >= fromDate);
-  }
-  if (to) {
-    const toDate = new Date(to);
-    logs = logs.filter(log => new Date(log.date) <= toDate);
-  }
-  if (limit) {
-    logs = logs.slice(0, parseInt(limit));
-  }
-
-  return res.status(200).json({
-    _id: userId,
-    username: user.username,
-    count: logs.length,
-    log: logs
-  });
-});
+}
+);
 
 const listener = app.listen(process.env.PORT || 3000, () => {
   console.log('Your app is listening on port ' + listener.address().port)
